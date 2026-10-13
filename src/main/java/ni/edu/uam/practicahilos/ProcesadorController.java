@@ -207,7 +207,7 @@ public class ProcesadorController implements Initializable {
     // =========================================================================
 
     @FXML
-    private void onIniciarProductos(ActionEvent event) {
+    void onIniciarProductos(ActionEvent event) {
         // Validación: evitar duplicados ante clics rápidos si el hilo sigue vivo
         if (hiloProductos != null && hiloProductos.isAlive()) {
             return;
@@ -291,7 +291,7 @@ public class ProcesadorController implements Initializable {
     }
 
     @FXML
-    private void onDetenerProductos(ActionEvent event) {
+    void onDetenerProductos(ActionEvent event) {
         lblEstadoProductos.setText("Solicitando detención...");
         btnDetenerProductos.setDisable(true);
 
@@ -301,7 +301,7 @@ public class ProcesadorController implements Initializable {
     }
 
     @FXML
-    private void onReiniciarProductos(ActionEvent event) {
+    void onReiniciarProductos(ActionEvent event) {
         // Solo permitido cuando el proceso no está activo
         if (hiloProductos != null && hiloProductos.isAlive()) {
             return;

@@ -87,17 +87,14 @@ public class ProcesadorHilosTest {
                 ProcesadorController controller = loader.getController();
 
                 // 1. Iniciar ambos procesos
-                controller.getClass().getDeclaredMethod("onIniciarClientes", javafx.event.ActionEvent.class)
-                        .invoke(controller, (javafx.event.ActionEvent) null);
-                controller.getClass().getDeclaredMethod("onIniciarProductos", javafx.event.ActionEvent.class)
-                        .invoke(controller, (javafx.event.ActionEvent) null);
+                controller.onIniciarClientes(null);
+                controller.onIniciarProductos(null);
 
                 assertTrue(controller.isClientesActivo(), "Clientes debe estar activo tras iniciar");
                 assertTrue(controller.isProductosActivo(), "Productos debe estar activo tras iniciar");
 
                 // 2. Detener un proceso (Productos) mientras Clientes continúa
-                controller.getClass().getDeclaredMethod("onDetenerProductos", javafx.event.ActionEvent.class)
-                        .invoke(controller, (javafx.event.ActionEvent) null);
+                controller.onDetenerProductos(null);
 
                 // Esperamos un momento breve en un hilo separado para verificar detención
                 new Thread(() -> {
@@ -128,6 +125,45 @@ public class ProcesadorHilosTest {
         assertTrue(latch.await(5, TimeUnit.SECONDS), "Timeout probando ciclo de vida del controlador");
         if (errorRef[0] != null) {
             fail("Error en prueba de ciclo de vida: " + errorRef[0].getMessage(), errorRef[0]);
+        }
+    }
+
+    @Test
+    @DisplayName("Verificar que clics rápidos en Iniciar no duplican la ejecución")
+    void testEvitarClicsRapidosDuplicados() throws Exception {
+        if (!javafxInicializado) {
+            return;
+        }
+
+        CountDownLatch latch = new CountDownLatch(1);
+        final Throwable[] errorRef = new Throwable[1];
+
+        Platform.runLater(() -> {
+            try {
+                FXMLLoader loader = new FXMLLoader(MainApp.class.getResource("procesador-view.fxml"));
+                loader.load();
+                ProcesadorController controller = loader.getController();
+
+                // Primer clic
+                controller.onIniciarClientes(null);
+                assertTrue(controller.isClientesActivo());
+
+                // Segundo clic inmediato mientras está activo
+                controller.onIniciarClientes(null);
+                assertTrue(controller.isClientesActivo());
+
+                // Detener limpiamente
+                controller.detenerAlCerrar();
+            } catch (Throwable t) {
+                errorRef[0] = t;
+            } finally {
+                latch.countDown();
+            }
+        });
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "Timeout probando clics rápidos");
+        if (errorRef[0] != null) {
+            fail("Error en prueba de clics rápidos: " + errorRef[0].getMessage(), errorRef[0]);
         }
     }
 
