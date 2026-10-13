@@ -93,7 +93,7 @@ $env:PATH = "$env:JAVA_HOME\bin;" + $env:PATH
    mvn clean compile
    ```
 
-2. **Ejecutar pruebas unitarias automatizadas (8 pruebas):**
+2. **Ejecutar pruebas unitarias automatizadas (10 pruebas):**
    ```powershell
    mvn test
    ```
@@ -185,23 +185,32 @@ En Java, los hilos no deben destruirse forzosamente con `Thread.stop()` porque d
 
 ---
 
-### Diferencia entre Detener, Reiniciar y Volver a Iniciar
+### Diferencia entre Iniciar (Continuar), Detener y Reiniciar
 
 1. **Detener (`onDetener`):**
-   * Señaliza la interrupción del hilo activo mediante `interrupt()`.
-   * El hilo finaliza su ciclo de vida y libera sus recursos.
-   * La interfaz muestra **"Proceso detenido"** y **conserva** el último valor del contador y de la barra de progreso (no los borra).
-   * Rehabilita los botones **Iniciar** y **Reiniciar**.
-2. **Reiniciar (`onReiniciar`):**
-   * Solo opera cuando el proceso **no está activo**.
-   * Restablece los controles a su condición inicial: estado a **"Esperando inicio"**, contador a `0 / total`, porcentaje a `0%` y barra a `0.0`.
-   * Incrementa un token de ejecución (`idEjecucion`) que descarta cualquier actualización retrasada en la cola de JavaFX.
-   * **No inicia automáticamente** ninguna ejecución nueva.
-3. **Volver a Iniciar (`onIniciar`):**
-   * Valida que no exista un hilo activo para evitar duplicados ante clics repetidos.
-   * Restablece los contadores a cero.
-   * Crea una **nueva instancia** de `Thread` (los hilos terminados no pueden reiniciarse).
-   * Asigna `setDaemon(true)` y arranca el hilo con `start()`.
+   * Señaliza la interrupción cooperativa del hilo activo mediante `interrupt()`.
+   * Si el hilo se encontraba durmiendo en `Thread.sleep()`, captura `InterruptedException`, restaura la marca de interrupción y termina el ciclo **sin contabilizar el registro actual** (queda pendiente).
+   * **Conserva el avance:** Al confirmarse la detención, sincroniza y mantiene en pantalla el número exacto de registros completados, el porcentaje y la barra de progreso (por ejemplo, `35 / 100` y `35%`).
+   * La interfaz muestra **"Proceso detenido"** y rehabilita los botones **Iniciar** y **Reiniciar**.
+   * Mientras el hilo se encuentra en proceso de detención, todos los botones permanecen deshabilitados para prevenir estados inconsistentes ante clics rápidos.
+
+2. **Iniciar / Continuar (`onIniciar`):**
+   * **Desde estado inicial (0 registros):** Comienza el procesamiento desde el primer registro (índice 0).
+   * **Después de detener:** **Continúa desde el progreso conservado** sin volver a cero. Por ejemplo, si Clientes se detuvo en `35 / 100`, la reanudación inicia inmediatamente con el registro 36.
+   * Crea una **nueva instancia independiente de `Thread`** con un nuevo `Runnable` que parte del contador conservado (los hilos terminados no pueden reutilizarse).
+   * Se configura con `setDaemon(true)` y arranca con `start()`.
+   * Si el proceso ya llegó al 100% de los registros, **Iniciar permanece deshabilitado** y no permite arrancar hasta que se pulse Reiniciar.
+
+3. **Reiniciar (`onReiniciar`):**
+   * Es la **ÚNICA acción que borra el avance**: restablece el contador de registros completados a 0, la barra a `0.0`, el porcentaje a `0%` y el estado a **"Esperando inicio"**.
+   * Solo opera cuando el proceso **no está activo ni deteniéndose**.
+   * **No inicia automáticamente** una nueva ejecución; deja el panel listo para que el usuario presione Iniciar cuando lo decida.
+   * Incrementa un token de ejecución (`idEjecucion`) que invalida y descarta cualquier actualización retrasada en la cola de JavaFX.
+
+4. **Al completar todos los registros (100%):**
+   * El estado cambia a **"Proceso finalizado"**, la barra queda al 100% (`1.0`) y el contador en `100 / 100` o `50 / 50`.
+   * **Iniciar y Detener quedan deshabilitados**, y **Reiniciar queda habilitado**.
+   * Para volver a ejecutar la simulación, el usuario **debe pulsar primero Reiniciar**.
 
 ---
 

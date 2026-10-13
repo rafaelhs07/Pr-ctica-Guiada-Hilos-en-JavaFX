@@ -17,7 +17,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Pruebas unitarias para validar las reglas de negocio, constantes,
- * existencia de recursos, carga de FXML y lógica de concurrencia e interrupción de la práctica.
+ * existencia de recursos, carga de FXML, reanudación tras detención,
+ * reinicio a cero y concurrencia de la práctica.
  */
 public class ProcesadorHilosTest {
 
@@ -41,7 +42,6 @@ public class ProcesadorHilosTest {
     @DisplayName("Verificar que procesador-view.fxml se carga correctamente con FXMLLoader y el controlador")
     void testCargaFxmlYControlador() throws Exception {
         if (!javafxInicializado) {
-            System.out.println("JavaFX toolkit no disponible en entorno actual, omitiendo prueba de UI completa.");
             return;
         }
         CountDownLatch latch = new CountDownLatch(1);
@@ -71,8 +71,8 @@ public class ProcesadorHilosTest {
     }
 
     @Test
-    @DisplayName("Verificar ciclo de vida del controlador: Iniciar, Detener, Reiniciar y Cierre controlado")
-    void testCicloVidaControlador() throws Exception {
+    @DisplayName("Verificar ciclo Iniciar -> Detener -> Iniciar continúa desde el progreso conservado")
+    void testContinuarDesdeProgresoConservado() throws Exception {
         if (!javafxInicializado) {
             return;
         }
@@ -86,29 +86,46 @@ public class ProcesadorHilosTest {
                 loader.load();
                 ProcesadorController controller = loader.getController();
 
-                // 1. Iniciar ambos procesos
+                // 1. Iniciar Clientes desde 0
                 controller.onIniciarClientes(null);
-                controller.onIniciarProductos(null);
+                assertTrue(controller.isClientesActivo());
 
-                assertTrue(controller.isClientesActivo(), "Clientes debe estar activo tras iniciar");
-                assertTrue(controller.isProductosActivo(), "Productos debe estar activo tras iniciar");
-
-                // 2. Detener un proceso (Productos) mientras Clientes continúa
-                controller.onDetenerProductos(null);
-
-                // Esperamos un momento breve en un hilo separado para verificar detención
+                // Hilo de control para simular la secuencia con pausas
                 new Thread(() -> {
                     try {
-                        Thread.sleep(300);
-                        assertFalse(controller.isProductosActivo(), "Productos debió detenerse tras la interrupción");
-                        assertTrue(controller.isClientesActivo(), "Clientes debe continuar ejecutándose");
-
-                        // 3. Probar detenerAlCerrar (idempotente)
-                        controller.detenerAlCerrar();
-                        controller.detenerAlCerrar();
-
+                        // Dejar avanzar unas iteraciones (~250ms -> 2 registros completados)
                         Thread.sleep(250);
-                        assertFalse(controller.isClientesActivo(), "Clientes debió detenerse tras detenerAlCerrar");
+
+                        // 2. Detener Clientes
+                        Platform.runLater(() -> controller.onDetenerClientes(null));
+                        Thread.sleep(150);
+
+                        assertFalse(controller.isClientesActivo(), "Clientes debió detenerse");
+                        final int primerProgreso = controller.getCompletadosClientes();
+                        assertTrue(primerProgreso > 0, "Debió completar al menos 1 registro antes de detenerse");
+
+                        // 3. Iniciar Clientes nuevamente: DEBE CONTINUAR, NO VOLVER A CERO
+                        Platform.runLater(() -> controller.onIniciarClientes(null));
+                        Thread.sleep(50);
+                        assertTrue(controller.isClientesActivo(), "Clientes debe volver a estar activo");
+
+                        // Dejar avanzar otras iteraciones
+                        Thread.sleep(250);
+                        Platform.runLater(() -> controller.onDetenerClientes(null));
+                        Thread.sleep(150);
+
+                        final int segundoProgreso = controller.getCompletadosClientes();
+                        assertTrue(segundoProgreso > primerProgreso,
+                                "El progreso debió continuar desde " + primerProgreso + " pero fue " + segundoProgreso);
+
+                        // 4. Reiniciar: debe ser la ÚNICA acción que regresa el contador a 0
+                        Platform.runLater(() -> controller.onReiniciarClientes(null));
+                        Thread.sleep(50);
+
+                        assertEquals(0, controller.getCompletadosClientes(), "Reiniciar debe regresar el progreso a cero");
+                        assertFalse(controller.isBtnIniciarClientesDisabled(), "Iniciar debe volver a estar habilitado");
+
+                        controller.detenerAlCerrar();
                     } catch (Throwable t) {
                         errorRef[0] = t;
                     } finally {
@@ -122,9 +139,108 @@ public class ProcesadorHilosTest {
             }
         });
 
-        assertTrue(latch.await(5, TimeUnit.SECONDS), "Timeout probando ciclo de vida del controlador");
+        assertTrue(latch.await(6, TimeUnit.SECONDS), "Timeout probando continuación de progreso");
         if (errorRef[0] != null) {
-            fail("Error en prueba de ciclo de vida: " + errorRef[0].getMessage(), errorRef[0]);
+            fail("Error en prueba de continuación: " + errorRef[0].getMessage(), errorRef[0]);
+        }
+    }
+
+    @Test
+    @DisplayName("Verificar que al completar el 100% Iniciar queda deshabilitado y requiere Reiniciar")
+    void testEstadoAlCompletarRequiereReiniciar() throws Exception {
+        if (!javafxInicializado) {
+            return;
+        }
+
+        CountDownLatch latch = new CountDownLatch(1);
+        final Throwable[] errorRef = new Throwable[1];
+
+        Platform.runLater(() -> {
+            try {
+                FXMLLoader loader = new FXMLLoader(MainApp.class.getResource("procesador-view.fxml"));
+                loader.load();
+                ProcesadorController controller = loader.getController();
+
+                // Simulamos que el contador llegó a 50 (total de productos)
+                java.lang.reflect.Field field = ProcesadorController.class.getDeclaredField("completadosProductos");
+                field.setAccessible(true);
+                ((AtomicInteger) field.get(controller)).set(ProcesadorController.TOTAL_PRODUCTOS);
+
+                // Llamar a Iniciar cuando ya está al 100%: no debe iniciar ningún hilo
+                controller.onIniciarProductos(null);
+                assertFalse(controller.isProductosActivo(), "No debe iniciar un hilo si ya está completado al 100%");
+
+                // Para ejecutar nuevamente se requiere Reiniciar primero
+                controller.onReiniciarProductos(null);
+                assertEquals(0, controller.getCompletadosProductos(), "Reiniciar debe restablecer a cero");
+                assertFalse(controller.isBtnIniciarProductosDisabled(), "Iniciar debe rehabilitarse tras reiniciar");
+
+                controller.detenerAlCerrar();
+            } catch (Throwable t) {
+                errorRef[0] = t;
+            } finally {
+                latch.countDown();
+            }
+        });
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "Timeout probando condición de completado");
+        if (errorRef[0] != null) {
+            fail("Error en prueba de completado: " + errorRef[0].getMessage(), errorRef[0]);
+        }
+    }
+
+    @Test
+    @DisplayName("Verificar independencia entre Clientes y Productos al detener y reanudar")
+    void testIndependenciaClientesYProductos() throws Exception {
+        if (!javafxInicializado) {
+            return;
+        }
+
+        CountDownLatch latch = new CountDownLatch(1);
+        final Throwable[] errorRef = new Throwable[1];
+
+        Platform.runLater(() -> {
+            try {
+                FXMLLoader loader = new FXMLLoader(MainApp.class.getResource("procesador-view.fxml"));
+                loader.load();
+                ProcesadorController controller = loader.getController();
+
+                // Iniciar ambos
+                controller.onIniciarClientes(null);
+                controller.onIniciarProductos(null);
+
+                assertTrue(controller.isClientesActivo());
+                assertTrue(controller.isProductosActivo());
+
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(200);
+
+                        // Detener solo Productos
+                        Platform.runLater(() -> controller.onDetenerProductos(null));
+                        Thread.sleep(100);
+
+                        assertFalse(controller.isProductosActivo(), "Productos debió detenerse");
+                        assertTrue(controller.isClientesActivo(), "Clientes debe seguir activo de forma independiente");
+
+                        // Detener todo
+                        controller.detenerAlCerrar();
+                    } catch (Throwable t) {
+                        errorRef[0] = t;
+                    } finally {
+                        latch.countDown();
+                    }
+                }).start();
+
+            } catch (Throwable t) {
+                errorRef[0] = t;
+                latch.countDown();
+            }
+        });
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS), "Timeout probando independencia de hilos");
+        if (errorRef[0] != null) {
+            fail("Error en prueba de independencia: " + errorRef[0].getMessage(), errorRef[0]);
         }
     }
 
